@@ -5,3 +5,14 @@
 expo-env.d.ts
 # @end expo-cli
 node_modules
+node_modules/
+.expo/
+.expo-shared/
+dist/
+build/
+.DS_Store
+*.log
+.env
+.env.local
+.vercel
+.next/

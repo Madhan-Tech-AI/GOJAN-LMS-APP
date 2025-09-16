@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, TextInput, Modal, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, TextInput, Modal, Dimensions, ActivityIndicator, Linking } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ArrowLeft, FileText, Play, Search, Clock, Eye, X, ChevronDown, ChevronRight, PlayCircle, Pause, RotateCcw, RotateCw } from 'lucide-react-native';
+import { ArrowLeft, FileText, Play, Search, Clock, Eye, X, ChevronDown, ChevronRight, PlayCircle, Pause, RotateCcw, RotateCw, Download } from 'lucide-react-native';
 import { sampleSubjects, sampleNotes, sampleVideos } from '@/data/sampleData';
 import { theme } from '@/theme';
 import { Video, ResizeMode } from 'expo-av';
+import { WebView } from 'react-native-webview';
 
 export default function SubjectPage() {
   const { id } = useLocalSearchParams();
@@ -17,6 +18,12 @@ export default function SubjectPage() {
   const [unitOpen, setUnitOpen] = useState<string | null>(null);
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showPdfViewer, setShowPdfViewer] = useState(false);
+  const [selectedNote, setSelectedNote] = useState<any>(null);
+  const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
+  const [showUnitDetail, setShowUnitDetail] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(true);
+  const [pdfError, setPdfError] = useState(false);
   
   const subject = sampleSubjects.find(s => s.id === id);
   const notes = sampleNotes.filter(note => note.subjectId === id);
@@ -28,6 +35,15 @@ export default function SubjectPage() {
       acc[video.unit] = [];
     }
     acc[video.unit].push(video);
+    return acc;
+  }, {} as Record<string, any[]>);
+  
+  // Group notes by units
+  const notesByUnit = notes.reduce((acc, note) => {
+    if (!acc[note.unit]) {
+      acc[note.unit] = [];
+    }
+    acc[note.unit].push(note);
     return acc;
   }, {} as Record<string, any[]>);
   
@@ -66,8 +82,69 @@ export default function SubjectPage() {
     setPlaybackRate(rates[nextIndex]);
   };
 
+  const convertGoogleDriveUrl = (url: string) => {
+    if (!url) return url;
+    
+    // Convert Google Drive sharing URL to direct view URL for PDFs
+    if (url.includes('drive.google.com/file/d/')) {
+      const fileId = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/)?.[1];
+      if (fileId) {
+        // Use the embed URL for better PDF viewing
+        return `https://drive.google.com/file/d/${fileId}/preview`;
+      }
+    }
+    return url;
+  };
+
+  const openPdfViewer = (note: any) => {
+    setSelectedNote(note);
+    setShowPdfViewer(true);
+    setPdfLoading(true);
+    setPdfError(false);
+  };
+
+  const openUnitDetail = (unit: string) => {
+    // Find the note for this unit and open PDF directly
+    const unitNote = notesByUnit[unit]?.[0];
+    if (unitNote) {
+      setSelectedNote(unitNote);
+      setShowPdfViewer(true);
+    }
+  };
+
+  const closeUnitDetail = () => {
+    setSelectedUnit(null);
+    setShowUnitDetail(false);
+  };
+
+  const renderUnitCard = (unit: string) => {
+    const unitNotes = notesByUnit[unit] || [];
+    const unitVideos = videosByUnit[unit] || [];
+    const unitTitle = (subject?.units as any)?.[unit] || unit;
+    
+    return (
+      <TouchableOpacity key={unit} style={styles.itemCard} onPress={() => openUnitDetail(unit)}>
+        <View style={styles.itemHeader}>
+          <View style={styles.itemIcon}>
+            <FileText size={20} color={theme.colors.primary} strokeWidth={2.5} />
+          </View>
+        </View>
+        
+        <Text style={styles.itemTitle}>{unit}</Text>
+        <Text style={styles.itemUnit}>{unitTitle}</Text>
+        
+        <View style={styles.itemFooter}>
+          <View style={styles.viewsContainer}>
+            <FileText size={12} color="#EF4444" strokeWidth={2} />
+            <Text style={styles.viewsText}>PDF Notes</Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   const renderNoteItem = ({ item }: { item: any }) => (
-    <TouchableOpacity style={styles.itemCard}>
+    <TouchableOpacity style={styles.itemCard} onPress={() => openPdfViewer(item)}>
       <View style={styles.itemHeader}>
         <View style={styles.itemIcon}>
           <FileText size={20} color={theme.colors.primary} strokeWidth={2.5} />
@@ -154,7 +231,7 @@ export default function SubjectPage() {
         >
           <FileText size={18} color={activeTab === 'notes' ? theme.colors.primary : theme.colors.textMuted} strokeWidth={2.5} />
           <Text style={[styles.tabText, activeTab === 'notes' && styles.activeTabText]}>
-            Notes ({filteredNotes.length})
+            Notes ({units.length})
           </Text>
         </TouchableOpacity>
         <TouchableOpacity 
@@ -163,7 +240,7 @@ export default function SubjectPage() {
         >
           <Play size={18} color={activeTab === 'videos' ? theme.colors.primary : theme.colors.textMuted} strokeWidth={2.5} />
           <Text style={[styles.tabText, activeTab === 'videos' && styles.activeTabText]}>
-            Videos ({filteredVideos.length})
+            Videos ({units.length})
           </Text>
         </TouchableOpacity>
       </View>
@@ -171,9 +248,9 @@ export default function SubjectPage() {
       <View style={styles.content}>
         {activeTab === 'notes' ? (
           <FlatList
-            data={filteredNotes}
-            renderItem={renderNoteItem}
-            keyExtractor={(item) => item.id}
+            data={units}
+            renderItem={({ item }) => renderUnitCard(item)}
+            keyExtractor={(item) => item}
             numColumns={2}
             columnWrapperStyle={styles.row}
             contentContainerStyle={styles.listContainer}
@@ -187,7 +264,7 @@ export default function SubjectPage() {
                   <ArrowLeft size={18} color={theme.colors.primary} strokeWidth={2.5} />
                   <Text style={styles.backToUnitsText}>Back to Units</Text>
                 </TouchableOpacity>
-                <Text style={styles.topicsTitle}>{unitOpen} Topics</Text>
+                <Text style={styles.topicsTitle}>{unitOpen} - {(subject?.units as any)?.[unitOpen!]}</Text>
               </View>
               <View style={styles.topicsContainer}>
                 {videosByUnit[unitOpen].map((video) => (
@@ -231,49 +308,158 @@ export default function SubjectPage() {
             <View style={{ width: 24 }} />
           </View>
           
+          {(selectedVideo?.videoUrl?.includes('youtube.com') || selectedVideo?.videoUrl?.includes('youtu.be')) && (
+            <View style={styles.youtubeNote}>
+              <Text style={styles.youtubeNoteText}>
+                Use YouTube's built-in controls for play, pause, speed, and fullscreen
+              </Text>
+            </View>
+          )}
+          
           <View style={styles.videoContainer}>
-            <Video
-              source={{ uri: selectedVideo?.videoUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4' }}
-              style={styles.video}
-              shouldPlay={isPlaying}
-              isLooping={false}
-              rate={playbackRate}
-              resizeMode={ResizeMode.CONTAIN}
-            />
+            {selectedVideo?.videoUrl?.includes('youtube.com') || selectedVideo?.videoUrl?.includes('youtu.be') ? (
+              <WebView
+                source={{ uri: selectedVideo.videoUrl }}
+                style={styles.video}
+                javaScriptEnabled={true}
+                domStorageEnabled={true}
+                allowsInlineMediaPlayback={true}
+                mediaPlaybackRequiresUserAction={false}
+                allowsFullscreenVideo={true}
+                startInLoadingState={true}
+                scalesPageToFit={true}
+                onError={(syntheticEvent) => {
+                  const { nativeEvent } = syntheticEvent;
+                  console.warn('Video WebView error: ', nativeEvent);
+                }}
+              />
+            ) : (
+              <Video
+                source={{ uri: selectedVideo?.videoUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4' }}
+                style={styles.video}
+                shouldPlay={isPlaying}
+                isLooping={false}
+                rate={playbackRate}
+                resizeMode={ResizeMode.CONTAIN}
+              />
+            )}
           </View>
           
-          <View style={styles.videoControls}>
-            <TouchableOpacity 
-              style={styles.controlButton}
-              onPress={() => setIsPlaying(!isPlaying)}
-            >
-              {isPlaying ? (
-                <Pause size={24} color="#ffffff" strokeWidth={2.5} />
-              ) : (
-                <PlayCircle size={24} color="#ffffff" strokeWidth={2.5} />
-              )}
+          {!(selectedVideo?.videoUrl?.includes('youtube.com') || selectedVideo?.videoUrl?.includes('youtu.be')) && (
+            <View style={styles.videoControls}>
+              <TouchableOpacity 
+                style={styles.controlButton}
+                onPress={() => setIsPlaying(!isPlaying)}
+              >
+                {isPlaying ? (
+                  <Pause size={24} color="#ffffff" strokeWidth={2.5} />
+                ) : (
+                  <PlayCircle size={24} color="#ffffff" strokeWidth={2.5} />
+                )}
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.controlButton}
+                onPress={changePlaybackRate}
+              >
+                <Text style={styles.playbackRateText}>{playbackRate}x</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.controlButton}
+                onPress={() => setPlaybackRate(Math.max(0.5, playbackRate - 0.25))}
+              >
+                <RotateCcw size={20} color="#ffffff" strokeWidth={2.5} />
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.controlButton}
+                onPress={() => setPlaybackRate(Math.min(2.0, playbackRate + 0.25))}
+              >
+                <RotateCw size={20} color="#ffffff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
+
+      {/* PDF Viewer Modal */}
+      <Modal visible={showPdfViewer} animationType="slide" presentationStyle="fullScreen">
+        <SafeAreaView style={styles.pdfViewerContainer}>
+          <View style={styles.pdfViewerHeader}>
+            <TouchableOpacity onPress={() => {
+              setShowPdfViewer(false);
+              setPdfLoading(true);
+              setPdfError(false);
+            }} style={styles.backButton}>
+              <ArrowLeft size={24} color={theme.colors.primary} strokeWidth={2.5} />
             </TouchableOpacity>
-            
+            <Text style={styles.pdfViewerTitle} numberOfLines={1}>
+              {selectedNote?.title}
+            </Text>
             <TouchableOpacity 
-              style={styles.controlButton}
-              onPress={changePlaybackRate}
+              onPress={() => {
+                // Open download link in browser
+                const downloadUrl = selectedNote?.pdfUrl?.replace('/view?usp=sharing', '/download');
+                if (downloadUrl) {
+                  Linking.openURL(downloadUrl).catch(err => {
+                    console.error('Failed to open download URL:', err);
+                  });
+                }
+              }}
+              style={styles.downloadButton}
             >
-              <Text style={styles.playbackRateText}>{playbackRate}x</Text>
+              <Download size={24} color={theme.colors.primary} strokeWidth={2.5} />
             </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.controlButton}
-              onPress={() => setPlaybackRate(Math.max(0.5, playbackRate - 0.25))}
-            >
-              <RotateCcw size={20} color="#ffffff" strokeWidth={2.5} />
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.controlButton}
-              onPress={() => setPlaybackRate(Math.min(2.0, playbackRate + 0.25))}
-            >
-              <RotateCw size={20} color="#ffffff" strokeWidth={2.5} />
-            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.pdfContainer}>
+            {pdfLoading && !pdfError && (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color={theme.colors.primary} />
+                <Text style={styles.loadingText}>Loading PDF...</Text>
+              </View>
+            )}
+            {pdfError && (
+              <View style={styles.errorContainer}>
+                <Text style={styles.pdfErrorText}>Failed to load PDF</Text>
+                <TouchableOpacity 
+                  style={styles.retryButton}
+                  onPress={() => {
+                    setPdfError(false);
+                    setPdfLoading(true);
+                  }}
+                >
+                  <Text style={styles.retryButtonText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            <WebView
+              source={{ uri: convertGoogleDriveUrl(selectedNote?.pdfUrl) }}
+              style={styles.pdfWebView}
+              startInLoadingState={false}
+              scalesPageToFit={true}
+              allowsInlineMediaPlayback={true}
+              mediaPlaybackRequiresUserAction={false}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              allowsFullscreenVideo={true}
+              mixedContentMode="compatibility"
+              onError={(syntheticEvent) => {
+                const { nativeEvent } = syntheticEvent;
+                console.warn('WebView error: ', nativeEvent);
+                setPdfLoading(false);
+                setPdfError(true);
+              }}
+              onLoadStart={() => {
+                console.log('PDF loading started');
+                setPdfLoading(true);
+              }}
+              onLoadEnd={() => {
+                console.log('PDF loading completed');
+                setPdfLoading(false);
+              }}
+            />
           </View>
         </SafeAreaView>
       </Modal>
@@ -593,5 +779,99 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#ffffff',
+  },
+  pdfViewerContainer: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+  },
+  pdfViewerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: theme.colors.accent,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  pdfViewerTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: theme.colors.primary,
+    flex: 1,
+    textAlign: 'center',
+    marginHorizontal: 16,
+  },
+  pdfContainer: {
+    flex: 1,
+  },
+  pdfWebView: {
+    flex: 1,
+  },
+  downloadButton: {
+    backgroundColor: 'rgba(36, 70, 45, 0.15)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    zIndex: 1,
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: theme.colors.primary,
+    fontWeight: '500',
+  },
+  errorContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    zIndex: 1,
+  },
+  pdfErrorText: {
+    fontSize: 18,
+    color: '#EF4444',
+    fontWeight: '600',
+    marginBottom: 16,
+  },
+  retryButton: {
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  youtubeNote: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  youtubeNoteText: {
+    color: '#ffffff',
+    fontSize: 14,
+    textAlign: 'center',
+    opacity: 0.8,
   },
 });
